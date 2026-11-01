@@ -47,6 +47,7 @@ supabase/.temp/*
 # Ignore .env and .env.local.old (may contain secrets)
 .env
 .env.*
+!.env.example
 /client_secret_2_311158025414-1lknket00pbkrpe70oq3bttkrk1v8mua.apps.googleusercontent.com.json
 # Astro docs build artifacts
 .astro/

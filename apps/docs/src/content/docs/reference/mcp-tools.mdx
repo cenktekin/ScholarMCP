@@ -87,7 +87,7 @@ Search Google Scholar using keyword, author, year-range, phrase, and exclusion f
 | --- | --- | --- | --- | --- |
 | `query` | string | Yes | - | General search query |
 | `author` | string | No | - | Author filter value |
-| `year_range` | number | No | - | Year range as [start, end] or \{ start, end \} |
+| `year_range` | number | No | - | Year range as \{ start, end \} |
 | `exact_phrase` | string | No | - | Exact phrase that must appear in results |
 | `exclude_words` | string | No | - | Words that should be excluded from results |
 | `title_only` | boolean | Yes | false | Restrict search terms to title only |
@@ -119,7 +119,7 @@ Search multiple scholarly metadata providers (OpenAlex, Crossref, Semantic Schol
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `query` | string | Yes | - | Research query string. |
-| `year_range` | number | No | - | Optional publication year range as [start, end] or \{start, end\}. |
+| `year_range` | number | No | - | Optional publication year range as \{start, end\}. |
 | `fields_of_study` | array | No | - | Optional field-of-study filters. |
 | `limit` | number | Yes | 10 | Maximum number of merged results. |
 | `sources` | enum (openalex, crossref, semantic_scholar, scholar_scrape) | No | - | Optional source allow-list. |
