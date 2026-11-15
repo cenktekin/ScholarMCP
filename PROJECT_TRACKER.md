@@ -88,6 +88,7 @@ Arşiv: `D:\projects\_yedek\scholarmcp-onarim-20261101-093029`
 | T8 | ~~`generate-docs-releases.mjs` tag listesini siliyor~~ | — | ✅ 2026-11-15 — tag yoksa dosyaya dokunmuyor |
 | T9 | ~~pnpm `ignored build scripts`~~ | — | ✅ 2026-11-15 — `allowBuilds` bool haritası |
 | T10 | Upstream `lstudlo/ScholarMCP` tag'lerini fork'a çekme (`git fetch --tags upstream`) | XS | T8 alternatifi; upstream remote tanımlı değil. Fayda düşük: fork kendi tag'ini `pnpm release` ile üretiyor |
+| T11 | GitHub Actions fork'ta hiç koşmuyor | S | **BLOKE**: 2 push (`4d3c4b5`, `db66a0f`) sonrası `actions/runs` `total_count: 0`; 4 workflow `active`; `workflow_dispatch` yok. Muhtemel neden private repo Actions kısıtı. T6'nın "CI yeşil" ayağı doğrulanamadı |
 | — | Stale `dist/` yenileme | — | Ertelendi: `prepack` zaten build ediyor, düşük değer |
 | — | Upstream drift / geri-merge stratejisi | — | Ertelendi: stratejik karar bekliyor |
 | — | `RESEARCH_SEMANTIC_ENGINE=cloud-llm` için OpenAI-uyumlu uç | — | Ertelendi: kullanım kanıtı gelince |

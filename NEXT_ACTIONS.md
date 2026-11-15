@@ -35,6 +35,7 @@ ScholarMCP\NEXT_ACTIONS.md oku — açık kalem yok, yalnız T10 (upstream tag) 
 | T8 | `generate-docs-releases.mjs` tag listesini siliyor | S | ✅ 2026-11-15 — tag yoksa dosyaya dokunmuyor |
 | T9 | pnpm `ignored build scripts` (esbuild, sharp) | XS | ✅ 2026-11-15 — `allowBuilds` bool haritası |
 | T10 | Upstream `lstudlo/ScholarMCP` tag'lerini fork'a çek (`git fetch --tags upstream`) | XS | ⏳ AÇIK — düşük fayda, karar bekliyor |
+| T11 | GitHub Actions fork'ta hiç koşmuyor | S | 🚫 BLOKE — 2 push sonrası `actions/runs` `total_count: 0` |
 
 
 **Doğrulama (2026-11-01):** `pnpm check` ✅ · 59 test ✅ · `pack:dry-run` ✅ (Windows düzeltmesi sonrası) ·
@@ -43,6 +44,11 @@ ScholarMCP\NEXT_ACTIONS.md oku — açık kalem yok, yalnız T10 (upstream tag) 
 **Doğrulama (2026-11-15):** `pnpm check` ✅ 0 hata · 59/59 test ✅ · `release:check` ✅ exit 0 (pack 41 dosya) ·
 `docs:build` ✅ `Complete!` · `git diff releases/index.mdx` ✅ boş · `pnpm install` ✅ ignored-builds uyarısı yok ·
 `src` içinde 400 satır üstü dosya: **0**.
+
+**CI durumu (2026-11-15):** `main` iki kez push edildi (`4d3c4b5`, `db66a0f`) → `gh run list` **boş**,
+`gh api repos/.../actions/runs` `total_count: 0`. Dört workflow da `active` ama hiç koşmuyor;
+`gh workflow run` çalışmıyor (`workflow_dispatch` trigger'ı yok). GitHub test workflow'unun yeşil olduğu
+**doğrulanamadı** — T6'nın bu ayağı T11 olarak açık.
 
 **TUR — kapanış 2026-11-15**
 T6 lokal merge + push ile kapandı (`main` = branch HEAD). T7'de beş dosya bölündü:
