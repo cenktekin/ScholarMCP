@@ -3,6 +3,11 @@ packages:
   - '!apps/docs-old'
   - 'packages/*'
 
+# pnpm 11 reads allowBuilds; pnpm 10 (used by CI workflows) reads onlyBuiltDependencies.
 allowBuilds:
   esbuild: true
   sharp: true
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
