@@ -1,14 +1,18 @@
 import { promises as fs } from 'node:fs';
-import { basename, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { PDFParse } from 'pdf-parse';
 import type { AppConfig } from '../config.js';
 import { Logger } from '../core/logger.js';
 import { IngestionError, DocumentNotFoundError, JobNotFoundError } from './errors.js';
-import type { CanonicalWork, IngestionJob, ParsedDocument, ParsedReference, SectionChunk } from './types.js';
-import { makeStableId, nowIso, normalizeWhitespace, parseYear } from './utils.js';
+import type { CanonicalWork, IngestionJob, ParsedDocument } from './types.js';
+import { makeStableId, nowIso } from './utils.js';
 import { LiteratureService } from './literature-service.js';
+import {
+  obtainPdfFile,
+  parseWithGrobid,
+  parseWithSimplePdf,
+  resolvePdfUrlFromLandingPages
+} from './ingestion-pdf-source.js';
+import { toAbsolutePath, type ParseOutput } from './ingestion-parsing.js';
 
 export type ParseMode = 'auto' | 'grobid' | 'simple';
 
@@ -29,157 +33,6 @@ interface ResolvedIngestionSource {
   licenseState: IngestionJob['licenseState'];
   provenanceWork: CanonicalWork | null;
 }
-
-interface ParseOutput {
-  parserName: string;
-  parserVersion: string;
-  confidence: number;
-  title: string | null;
-  abstract: string | null;
-  fullText: string;
-  sections: SectionChunk[];
-  references: ParsedReference[];
-}
-
-const DOI_REGEX = /10\.\d{4,9}\/[\-._;()/:A-Z0-9]+/i;
-const PDF_LINK_REGEX = /href=["']([^"']+\.pdf(?:\?[^"']*)?)["']/i;
-
-const toAbsolutePath = (value: string): string => (value.startsWith('/') ? value : resolve(process.cwd(), value));
-
-const splitLines = (text: string): string[] => text.split(/\r?\n/).map((line) => line.trim());
-
-const isLikelyHeading = (line: string): boolean =>
-  /^(abstract|introduction|background|related work|method(?:s)?|materials|results|discussion|conclusion|limitations|references)\b/i.test(
-    line.trim()
-  );
-
-const splitIntoSections = (text: string): SectionChunk[] => {
-  const lines = splitLines(text).filter((line) => line.length > 0);
-  if (lines.length === 0) {
-    return [];
-  }
-
-  const sections: SectionChunk[] = [];
-  let currentHeading = 'Body';
-  let currentLines: string[] = [];
-
-  const pushCurrent = () => {
-    const sectionText = normalizeWhitespace(currentLines.join(' '));
-    if (sectionText.length === 0) {
-      return;
-    }
-
-    sections.push({
-      id: makeStableId([currentHeading, sectionText.slice(0, 120)], 'section'),
-      heading: currentHeading,
-      text: sectionText,
-      pageStart: null,
-      pageEnd: null
-    });
-  };
-
-  for (const line of lines) {
-    if (isLikelyHeading(line) && currentLines.length > 0) {
-      pushCurrent();
-      currentHeading = line;
-      currentLines = [];
-      continue;
-    }
-
-    if (isLikelyHeading(line) && currentLines.length === 0) {
-      currentHeading = line;
-      continue;
-    }
-
-    currentLines.push(line);
-  }
-
-  if (currentLines.length > 0) {
-    pushCurrent();
-  }
-
-  return sections;
-};
-
-const extractReferences = (text: string): ParsedReference[] => {
-  const lines = splitLines(text);
-  const referencesStart = lines.findIndex((line) => /^references$/i.test(line));
-  const sourceLines = referencesStart >= 0 ? lines.slice(referencesStart + 1) : lines.slice(-120);
-
-  return sourceLines
-    .filter((line) => line.length > 30)
-    .slice(0, 60)
-    .map((line) => {
-      const doi = line.match(DOI_REGEX)?.[0]?.toLowerCase() ?? null;
-      const year = parseYear(line);
-      return {
-        rawText: line,
-        doi,
-        title: null,
-        year,
-        authors: []
-      } satisfies ParsedReference;
-    });
-};
-
-const extractTitleAndAbstract = (text: string): { title: string | null; abstract: string | null } => {
-  const lines = splitLines(text).filter((line) => line.length > 0);
-  const title = lines[0] ?? null;
-
-  let abstract: string | null = null;
-  const abstractIndex = lines.findIndex((line) => /^abstract$/i.test(line) || /^abstract[:\s]/i.test(line));
-  if (abstractIndex >= 0) {
-    abstract = normalizeWhitespace(lines.slice(abstractIndex, abstractIndex + 6).join(' '));
-  }
-
-  return {
-    title,
-    abstract
-  };
-};
-
-const parseGrobidXml = (xml: string): ParseOutput => {
-  const title = xml.match(/<title[^>]*type="main"[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? null;
-  const body = xml.match(/<body>([\s\S]*?)<\/body>/i)?.[1] ?? '';
-  const text = normalizeWhitespace(body.replace(/<[^>]+>/g, ' '));
-
-  const references = [...xml.matchAll(/<biblStruct[\s\S]*?<\/biblStruct>/gim)]
-    .slice(0, 120)
-    .map((entry) => {
-      const raw = normalizeWhitespace(entry[0].replace(/<[^>]+>/g, ' '));
-      const doi = entry[0].match(DOI_REGEX)?.[0]?.toLowerCase() ?? null;
-      const refTitle = entry[0].match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? null;
-      return {
-        rawText: raw,
-        doi,
-        title: refTitle ? normalizeWhitespace(refTitle.replace(/<[^>]+>/g, ' ')) : null,
-        year: parseYear(raw),
-        authors: []
-      } satisfies ParsedReference;
-    });
-
-  const normalizedTitle = title ? normalizeWhitespace(title.replace(/<[^>]+>/g, ' ')) : null;
-  const sections = splitIntoSections(text);
-
-  return {
-    parserName: 'grobid',
-    parserVersion: 'service',
-    confidence: text.length > 0 ? 0.85 : 0.65,
-    title: normalizedTitle,
-    abstract: null,
-    fullText: text,
-    sections,
-    references
-  };
-};
-
-const resolveUrlCandidate = (candidate: string, baseUrl: string): string | null => {
-  try {
-    return new URL(candidate, baseUrl).toString();
-  } catch {
-    return null;
-  }
-};
 
 export class IngestionService {
   private readonly jobs = new Map<string, IngestionJob>();
@@ -346,7 +199,10 @@ export class IngestionService {
 
     const paperUrlCandidate = input.paperUrl ?? resolvedWork?.url ?? null;
     const paperUrlPdfCandidate = paperUrlCandidate?.toLowerCase().endsWith('.pdf') ? paperUrlCandidate : null;
-    const discoveredPdfFromLanding = await this.resolvePdfUrlFromLandingPages([paperUrlCandidate, resolvedWork?.url]);
+    const discoveredPdfFromLanding = await resolvePdfUrlFromLandingPages(
+      [paperUrlCandidate, resolvedWork?.url],
+      this.logger
+    );
 
     const resolvedPdfUrl =
       input.pdfUrl ??
@@ -369,7 +225,7 @@ export class IngestionService {
   }
 
   private async parseSourcePdf(source: ResolvedIngestionSource, parseMode: ParseMode): Promise<ParseOutput> {
-    const { filePath, cleanup } = await this.obtainPdfFile(source);
+    const { filePath, cleanup } = await obtainPdfFile(source);
 
     try {
       const modes = this.resolveParserOrder(parseMode);
@@ -381,10 +237,10 @@ export class IngestionService {
               if (!this.config.researchGrobidUrl) {
                 continue;
               }
-              return await this.parseWithGrobid(filePath);
+              return await parseWithGrobid(filePath, this.config.researchGrobidUrl);
             }
             case 'simple': {
-              return await this.parseWithSimplePdf(filePath);
+              return await parseWithSimplePdf(filePath);
             }
           }
         } catch (error) {
@@ -413,197 +269,5 @@ export class IngestionService {
     }
 
     return ['simple'];
-  }
-
-  private async obtainPdfFile(source: ResolvedIngestionSource): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
-    if (source.localPdfPath) {
-      return {
-        filePath: source.localPdfPath,
-        cleanup: async () => undefined
-      };
-    }
-
-    if (!source.pdfUrl) {
-      throw new IngestionError('Missing PDF URL after source resolution.');
-    }
-
-    const response = await fetch(source.pdfUrl, {
-      headers: {
-        accept: 'application/pdf,*/*',
-        'user-agent': 'ScholarMCP/1.0 (+https://github.com/lstudlo/ScholarMCP)'
-      }
-    });
-
-    if (!response.ok) {
-      throw new IngestionError(`Failed to download PDF. HTTP ${response.status}`);
-    }
-
-    const bytes = await response.arrayBuffer();
-    const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
-    const buffer = Buffer.from(bytes);
-    const looksLikePdf = buffer.length >= 4 && buffer.subarray(0, 4).toString('utf8') === '%PDF';
-    if (!contentType.includes('application/pdf') && !looksLikePdf) {
-      throw new IngestionError(
-        `Downloaded content is not a PDF (content-type: ${contentType || 'unknown'}).`
-      );
-    }
-
-    const tempPath = resolve(tmpdir(), `scholar-mcp-${Date.now()}-${randomUUID()}.pdf`);
-    await fs.writeFile(tempPath, buffer);
-
-    return {
-      filePath: tempPath,
-      cleanup: async () => {
-        await fs.unlink(tempPath).catch(() => undefined);
-      }
-    };
-  }
-
-  private async parseWithSimplePdf(filePath: string): Promise<ParseOutput> {
-    const buffer = await fs.readFile(filePath);
-    const parser = new PDFParse({ data: buffer });
-    const parsed = await parser.getText();
-    await parser.destroy();
-    const text = normalizeWhitespace(parsed.text ?? '');
-
-    if (!text) {
-      throw new IngestionError('Simple PDF parser returned empty text.');
-    }
-
-    const sections = splitIntoSections(parsed.text ?? '');
-    const references = extractReferences(parsed.text ?? '');
-    const { title, abstract } = extractTitleAndAbstract(parsed.text ?? '');
-
-    return {
-      parserName: 'pdf-parse',
-      parserVersion: '2.x',
-      confidence: 0.62,
-      title,
-      abstract,
-      fullText: text,
-      sections,
-      references
-    };
-  }
-
-  private async parseWithGrobid(filePath: string): Promise<ParseOutput> {
-    if (!this.config.researchGrobidUrl) {
-      throw new IngestionError('GROBID URL is not configured.');
-    }
-
-    const url = new URL('/api/processFulltextDocument', this.config.researchGrobidUrl);
-    const buffer = await fs.readFile(filePath);
-    const formData = new FormData();
-    formData.set('input', new Blob([buffer], { type: 'application/pdf' }), basename(filePath));
-    formData.set('consolidateHeader', '1');
-    formData.set('consolidateCitations', '1');
-
-    const response = await fetch(url, {
-      method: 'POST',
-      body: formData
-    });
-
-    if (!response.ok) {
-      throw new IngestionError(`GROBID returned HTTP ${response.status}`);
-    }
-
-    const xml = await response.text();
-    const parsed = parseGrobidXml(xml);
-    if (!parsed.fullText) {
-      throw new IngestionError('GROBID response did not include extractable body text.');
-    }
-
-    return parsed;
-  }
-
-  private async resolvePdfUrlFromLandingPages(urls: Array<string | null | undefined>): Promise<string | null> {
-    const seen = new Set<string>();
-    for (const candidate of urls) {
-      if (!candidate) {
-        continue;
-      }
-
-      const normalized = candidate.trim();
-      if (!normalized || seen.has(normalized)) {
-        continue;
-      }
-      seen.add(normalized);
-
-      try {
-        const discovered = await this.resolvePdfUrlFromLandingPage(normalized);
-        if (discovered) {
-          return discovered;
-        }
-      } catch (error) {
-        this.logger.debug('Landing page PDF discovery failed', {
-          paperUrl: normalized,
-          error: error instanceof Error ? error.message : String(error)
-        });
-      }
-    }
-
-    return null;
-  }
-
-  private async resolvePdfUrlFromLandingPage(paperUrl: string): Promise<string | null> {
-    const response = await fetch(paperUrl, {
-      headers: {
-        accept: 'text/html,application/pdf,*/*',
-        'user-agent': 'ScholarMCP/1.0 (+https://github.com/lstudlo/ScholarMCP)'
-      }
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const finalUrl = response.url || paperUrl;
-    const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
-    if (contentType.includes('application/pdf')) {
-      return finalUrl;
-    }
-
-    const html = await response.text();
-    if (!html) {
-      return null;
-    }
-
-    const metaPatterns = [
-      /<meta[^>]+name=["']citation_pdf_url["'][^>]+content=["']([^"']+)["'][^>]*>/i,
-      /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']citation_pdf_url["'][^>]*>/i,
-      /<meta[^>]+property=["']og:pdf["'][^>]+content=["']([^"']+)["'][^>]*>/i,
-      /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:pdf["'][^>]*>/i
-    ];
-
-    for (const pattern of metaPatterns) {
-      const match = html.match(pattern);
-      if (match?.[1]) {
-        const resolved = resolveUrlCandidate(match[1], finalUrl);
-        if (resolved) {
-          return resolved;
-        }
-      }
-    }
-
-    const linkPatterns = [
-      /<link[^>]+type=["']application\/pdf["'][^>]+href=["']([^"']+)["'][^>]*>/i,
-      /<link[^>]+href=["']([^"']+)["'][^>]+type=["']application\/pdf["'][^>]*>/i
-    ];
-    for (const pattern of linkPatterns) {
-      const match = html.match(pattern);
-      if (match?.[1]) {
-        const resolved = resolveUrlCandidate(match[1], finalUrl);
-        if (resolved) {
-          return resolved;
-        }
-      }
-    }
-
-    const anchorMatch = html.match(PDF_LINK_REGEX);
-    if (anchorMatch?.[1]) {
-      return resolveUrlCandidate(anchorMatch[1], finalUrl);
-    }
-
-    return null;
   }
 }

@@ -2,3 +2,7 @@ packages:
   - 'apps/*'
   - '!apps/docs-old'
   - 'packages/*'
+
+allowBuilds:
+  esbuild: true
+  sharp: true

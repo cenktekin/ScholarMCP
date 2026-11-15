@@ -8,16 +8,8 @@ import { Logger } from '../core/logger.js';
 import { createScholarMcpServer } from '../mcp/create-scholar-mcp-server.js';
 import type { ResearchService } from '../research/research-service.js';
 import type { ScholarService } from '../scholar/scholar-service.js';
-
-const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
-
-interface SessionRuntime {
-  sessionId: string;
-  createdAt: number;
-  lastSeenAt: number;
-  transport: WebStandardStreamableHTTPServerTransport;
-  closeServer: () => Promise<void>;
-}
+import { attachCorsHeaders, isAuthorized, isHostAllowed, isOriginAllowed } from './http-security.js';
+import { createSessionStore } from './http-session-store.js';
 
 interface TransportResolution {
   transport: WebStandardStreamableHTTPServerTransport;
@@ -34,93 +26,6 @@ interface HttpAppRuntime {
 
 const MCP_SESSION_HEADER = 'mcp-session-id';
 
-const normalizeHostHeader = (hostHeader: string): { full: string; hostname: string } => {
-  const normalized = hostHeader.trim().toLowerCase();
-  const withoutPort = normalized.startsWith('[')
-    ? normalized.replace(/^\[([^\]]+)\](?::\d+)?$/, '$1')
-    : normalized.replace(/:\d+$/, '');
-
-  return {
-    full: normalized,
-    hostname: withoutPort
-  };
-};
-
-const isLoopbackOrigin = (origin: string): boolean => {
-  try {
-    const parsed = new URL(origin);
-    return LOCAL_HOSTS.has(parsed.hostname.toLowerCase());
-  } catch {
-    return false;
-  }
-};
-
-const isHostAllowed = (hostHeader: string, config: AppConfig): boolean => {
-  if (!hostHeader) {
-    return false;
-  }
-
-  const host = normalizeHostHeader(hostHeader);
-
-  if (config.allowedHosts.length > 0) {
-    return config.allowedHosts.includes(host.full) || config.allowedHosts.includes(host.hostname);
-  }
-
-  if (LOCAL_HOSTS.has(config.host.toLowerCase())) {
-    return LOCAL_HOSTS.has(host.hostname);
-  }
-
-  return true;
-};
-
-const isOriginAllowed = (origin: string | undefined, config: AppConfig): boolean => {
-  if (!origin) {
-    return true;
-  }
-
-  if (config.allowedOrigins.length > 0) {
-    return config.allowedOrigins.includes(origin);
-  }
-
-  if (LOCAL_HOSTS.has(config.host.toLowerCase())) {
-    return isLoopbackOrigin(origin);
-  }
-
-  return true;
-};
-
-const isAuthorized = (authorization: string | undefined, config: AppConfig): boolean => {
-  if (!config.apiKey) {
-    return true;
-  }
-
-  if (!authorization || !authorization.startsWith('Bearer ')) {
-    return false;
-  }
-
-  const token = authorization.slice('Bearer '.length).trim();
-  return token.length > 0 && token === config.apiKey;
-};
-
-const attachCorsHeaders = (response: Response, origin: string | undefined): Response => {
-  if (!origin) {
-    return response;
-  }
-
-  response.headers.set('Access-Control-Allow-Origin', origin);
-  response.headers.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
-  response.headers.set(
-    'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, mcp-session-id, MCP-Protocol-Version, Last-Event-ID'
-  );
-  response.headers.set('Access-Control-Expose-Headers', 'mcp-session-id, MCP-Protocol-Version');
-  response.headers.set('Vary', 'Origin');
-  return response;
-};
-
-const isStale = (runtime: SessionRuntime, now: number, config: AppConfig): boolean =>
-  now - runtime.lastSeenAt > config.httpSessionTtlMs;
-
 export const createHttpApp = (
   config: AppConfig,
   service: ScholarService,
@@ -128,74 +33,10 @@ export const createHttpApp = (
   logger: Logger
 ): HttpAppRuntime => {
   const app = new Hono();
-  const sessions = new Map<string, SessionRuntime>();
-
-  const closeSession = async (
-    sessionId: string,
-    reason: string,
-    closeTransport: boolean
-  ): Promise<boolean> => {
-    const runtime = sessions.get(sessionId);
-    if (!runtime) {
-      return false;
-    }
-
-    sessions.delete(sessionId);
-
-    if (closeTransport) {
-      await runtime.transport.close().catch(() => undefined);
-    }
-
-    await runtime.closeServer().catch(() => undefined);
-
-    logger.debug('Closed MCP HTTP session', {
-      sessionId,
-      reason,
-      openSessions: sessions.size
-    });
-
-    return true;
-  };
-
-  const pruneExpiredSessions = async (reason: string): Promise<void> => {
-    if (config.httpSessionMode !== 'stateful' || sessions.size === 0) {
-      return;
-    }
-
-    const now = Date.now();
-    const expired = [...sessions.entries()]
-      .filter(([, runtime]) => isStale(runtime, now, config))
-      .map(([sessionId]) => sessionId);
-
-    await Promise.all(expired.map((sessionId) => closeSession(sessionId, reason, true)));
-  };
-
-  const evictOldestSession = async (): Promise<void> => {
-    if (sessions.size < config.httpMaxSessions) {
-      return;
-    }
-
-    let oldestSessionId: string | null = null;
-    let oldestSeen = Number.POSITIVE_INFINITY;
-
-    for (const [sessionId, runtime] of sessions.entries()) {
-      if (runtime.lastSeenAt < oldestSeen) {
-        oldestSeen = runtime.lastSeenAt;
-        oldestSessionId = sessionId;
-      }
-    }
-
-    if (oldestSessionId) {
-      await closeSession(oldestSessionId, 'evicted_capacity', true);
-      logger.warn('Evicted oldest HTTP MCP session to respect session limit', {
-        maxSessions: config.httpMaxSessions,
-        evictedSessionId: oldestSessionId
-      });
-    }
-  };
+  const sessionStore = createSessionStore(config, logger);
 
   const createSessionRuntime = async (): Promise<TransportResolution> => {
-    await evictOldestSession();
+    await sessionStore.evictOldest();
 
     const server = createScholarMcpServer(config, service, researchService, logger);
     const transport = new WebStandardStreamableHTTPServerTransport({
@@ -203,7 +44,7 @@ export const createHttpApp = (
       enableJsonResponse: true,
       onsessioninitialized: (sessionId) => {
         const now = Date.now();
-        sessions.set(sessionId, {
+        sessionStore.register({
           sessionId,
           createdAt: now,
           lastSeenAt: now,
@@ -213,11 +54,11 @@ export const createHttpApp = (
 
         logger.debug('Initialized MCP HTTP session', {
           sessionId,
-          openSessions: sessions.size
+          openSessions: sessionStore.size
         });
       },
       onsessionclosed: (sessionId) => {
-        void closeSession(sessionId, 'client_delete', false);
+        void sessionStore.close(sessionId, 'client_delete', false);
       }
     });
 
@@ -253,18 +94,18 @@ export const createHttpApp = (
       return createStatelessRuntime();
     }
 
-    await pruneExpiredSessions('ttl_expired');
+    await sessionStore.pruneExpired('ttl_expired');
 
     const method = request.method.toUpperCase();
     const sessionId = request.headers.get(MCP_SESSION_HEADER)?.trim();
 
     if (sessionId) {
-      const runtime = sessions.get(sessionId);
+      const runtime = sessionStore.get(sessionId);
       if (!runtime) {
         return Response.json({ error: 'Session not found' }, { status: 404 });
       }
 
-      runtime.lastSeenAt = Date.now();
+      sessionStore.touch(sessionId);
       return {
         transport: runtime.transport,
         closeServer: runtime.closeServer,
@@ -334,7 +175,7 @@ export const createHttpApp = (
       serverVersion: config.serverVersion,
       transport: 'http',
       sessionMode: config.httpSessionMode,
-      openSessions: sessions.size,
+      openSessions: sessionStore.size,
       timestamp: new Date().toISOString()
     })
   );
@@ -412,9 +253,7 @@ export const createHttpApp = (
   return {
     app,
     shutdown: async () => {
-      await Promise.all(
-        [...sessions.keys()].map((sessionId) => closeSession(sessionId, 'server_shutdown', true))
-      );
+      await sessionStore.closeAll('server_shutdown');
     }
   };
 };

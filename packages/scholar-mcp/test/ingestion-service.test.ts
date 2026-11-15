@@ -7,6 +7,23 @@ import { parseConfig } from '../src/config.js';
 import { Logger } from '../src/core/logger.js';
 import { IngestionError } from '../src/research/errors.js';
 import { IngestionService } from '../src/research/ingestion-service.js';
+import {
+  obtainPdfFile,
+  parseWithGrobid,
+  parseWithSimplePdf,
+  resolvePdfUrlFromLandingPages
+} from '../src/research/ingestion-pdf-source.js';
+
+vi.mock('../src/research/ingestion-pdf-source.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/research/ingestion-pdf-source.js')>();
+  return {
+    ...actual,
+    obtainPdfFile: vi.fn(actual.obtainPdfFile),
+    parseWithGrobid: vi.fn(actual.parseWithGrobid),
+    parseWithSimplePdf: vi.fn(actual.parseWithSimplePdf),
+    resolvePdfUrlFromLandingPages: vi.fn(actual.resolvePdfUrlFromLandingPages)
+  };
+});
 
 const makeService = (overrides?: Parameters<typeof parseConfig>[0], literatureService?: Partial<Record<string, unknown>>) =>
   new IngestionService(
@@ -23,7 +40,6 @@ const makeService = (overrides?: Parameters<typeof parseConfig>[0], literatureSe
 
 describe('IngestionService', () => {
   afterEach(() => {
-    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -71,8 +87,8 @@ describe('IngestionService', () => {
     };
     const service = makeService(undefined, literatureService);
     const landingSpy = vi
-      .spyOn(service as never, 'resolvePdfUrlFromLandingPages')
-      .mockResolvedValue('https://example.org/discovered.pdf');
+      .mocked(resolvePdfUrlFromLandingPages)
+      .mockResolvedValueOnce('https://example.org/discovered.pdf');
 
     const resolved = await (service as never as { resolveSource: (input: unknown) => Promise<any> }).resolveSource({
       doi: '10.1000/example'
@@ -89,7 +105,6 @@ describe('IngestionService', () => {
   });
 
   it('discovers pdf urls from landing pages and direct pdf responses', async () => {
-    const service = makeService();
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -106,20 +121,15 @@ describe('IngestionService', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      (service as never as { resolvePdfUrlFromLandingPage: (url: string) => Promise<string | null> }).resolvePdfUrlFromLandingPage(
-        'https://example.org/article'
-      )
+      resolvePdfUrlFromLandingPages(['https://example.org/article'], new Logger('error'))
     ).resolves.toBe('https://example.org/paper.pdf');
 
     await expect(
-      (service as never as { resolvePdfUrlFromLandingPage: (url: string) => Promise<string | null> }).resolvePdfUrlFromLandingPage(
-        'https://example.org/direct-pdf'
-      )
+      resolvePdfUrlFromLandingPages(['https://example.org/direct-pdf'], new Logger('error'))
     ).resolves.toBe('https://example.org/direct-pdf');
   });
 
   it('downloads pdf files and rejects non-pdf content', async () => {
-    const service = makeService();
     const pdfBytes = Buffer.from('%PDF-1.4 sample');
 
     vi.stubGlobal(
@@ -140,17 +150,13 @@ describe('IngestionService', () => {
         )
     );
 
-    const downloaded = await (service as never as { obtainPdfFile: (source: unknown) => Promise<any> }).obtainPdfFile({
-      pdfUrl: 'https://example.org/paper.pdf'
-    });
+    const downloaded = await obtainPdfFile({ localPdfPath: null, pdfUrl: 'https://example.org/paper.pdf' });
 
     expect(String(await readFile(downloaded.filePath))).toContain('%PDF-1.4');
     await downloaded.cleanup();
 
     await expect(
-      (service as never as { obtainPdfFile: (source: unknown) => Promise<any> }).obtainPdfFile({
-        pdfUrl: 'https://example.org/not-pdf'
-      })
+      obtainPdfFile({ localPdfPath: null, pdfUrl: 'https://example.org/not-pdf' })
     ).rejects.toBeInstanceOf(IngestionError);
   });
 
@@ -160,12 +166,12 @@ describe('IngestionService', () => {
     const filePath = join(tempDir, 'paper.pdf');
     writeFileSync(filePath, '%PDF-1.4\n');
 
-    vi.spyOn(service as never, 'obtainPdfFile').mockResolvedValue({
+    vi.mocked(obtainPdfFile).mockResolvedValueOnce({
       filePath,
       cleanup: async () => undefined
     });
-    vi.spyOn(service as never, 'parseWithGrobid').mockRejectedValue(new Error('grobid unavailable'));
-    vi.spyOn(service as never, 'parseWithSimplePdf').mockResolvedValue({
+    vi.mocked(parseWithGrobid).mockRejectedValueOnce(new Error('grobid unavailable'));
+    vi.mocked(parseWithSimplePdf).mockResolvedValueOnce({
       parserName: 'pdf-parse',
       parserVersion: '2.x',
       confidence: 0.62,

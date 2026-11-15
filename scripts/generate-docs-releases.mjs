@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -86,7 +86,13 @@ Current package version from \`packages/scholar-mcp/package.json\`: **${currentV
 ${releaseLines}
 `;
 
-mkdirSync(dirname(outputMdxPath), { recursive: true });
-writeFileSync(outputMdxPath, `${mdx}\n`, 'utf8');
+if (releases.length === 0 && existsSync(outputMdxPath)) {
+  process.stdout.write(
+    'No semantic version tags found locally; keeping the existing releases index untouched.\n'
+  );
+} else {
+  mkdirSync(dirname(outputMdxPath), { recursive: true });
+  writeFileSync(outputMdxPath, `${mdx}\n`, 'utf8');
 
-process.stdout.write(`Generated releases index with ${releases.length} tag entries.\n`);
+  process.stdout.write(`Generated releases index with ${releases.length} tag entries.\n`);
+}

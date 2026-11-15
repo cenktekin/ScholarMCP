@@ -5,11 +5,12 @@
 | Alan | Değer |
 |------|-------|
 | Sürüm | 1.1.0 (Unreleased: `year_range` JSON Schema düzeltmesi) |
-| Son güncelleme | 2026-11-01 |
+| Son güncelleme | 2026-11-15 |
 | Repo | `github.com/cenktekin/ScholarMCP` (fork) · upstream `lstudlo/ScholarMCP` |
 | Stack | TypeScript + Node ≥20 · pnpm workspace · MCP SDK · Hono · Zod · Astro docs |
 | Test | 59 test (vitest) · `pnpm check` (tsc --noEmit) · 4 GitHub Actions workflow'u |
-| Aktif branch | `fix/year-range-json-schema` (main'den 2 commit ileri) |
+| Aktif branch | `main` (T6 birleştirmesi sonrası) |
+| Dosya boyutu | `src/**/*.ts` içinde 400 satır üstü dosya yok (2026-11-15) |
 
 ## Sağlık
 
@@ -46,14 +47,47 @@
 
 Arşiv: `D:\projects\_yedek\scholarmcp-onarim-20261101-093029`
 
+## Yapılanlar (2026-11-15)
+
+| # | Kalem | Durum | Kanıt |
+|---|-------|-------|-------|
+| T6 | `fix/year-range-json-schema` → `main` (lokal merge + push) | ✅ | `main` = branch HEAD · `git rev-list --count fix/..main` = 0 |
+| T7 | 400 satır üstü dosyaları böl | ✅ | `create-scholar-mcp-server.ts` 666→56 · ingestion 609→274 · literature 545→294 · citation 540→245 · start-http-server 457→297 · `src` içinde >400 satır dosya **0** |
+| T8 | `generate-docs-releases.mjs` tag listesini siliyordu | ✅ | Boş tag listesinde dosyaya dokunmuyor; `git diff apps/docs/.../releases/index.mdx` **boş** |
+| T9 | pnpm `ERR_PNPM_IGNORED_BUILDS` | ✅ | `allowBuilds: {esbuild: true, sharp: true}` (pnpm 11 şeması) · `pnpm install` build adımlarını çalıştırdı, uyarı yok |
+
+**T7 sonrası modül haritası:**
+
+| Modül | Sorumluluk |
+|-------|-----------|
+| `mcp/create-scholar-mcp-server.ts` | Sunucu kurulumu + registrar sırası (56 satır) |
+| `mcp/tools/{search,ingestion,citation,reference}-tools.ts` | 10 MCP tool tanımı, domain bazlı |
+| `mcp/tool-helpers.ts` | `McpToolContext`, hata eşleme, ortak şemalar |
+| `research/ingestion-{parsing,pdf-source}.ts` | Metin ayrıştırma · PDF indirme/keşif · parser adaptörleri |
+| `research/literature-{ranking,merge}.ts` | Skor/eşleştirme yardımcıları · provider merge + rank |
+| `research/citation-formatting.ts` | CSL/BibTeX biçimlendirme ve atıf ayrıştırma |
+| `http/http-security.ts` · `http/http-session-store.ts` | Host/origin/auth + CORS · oturum yaşam döngüsü |
+
+**Doğrulama kapıları (2026-11-15, Windows 11 · pnpm 11.28.9):**
+
+| Kapı | Sonuç |
+|------|-------|
+| `pnpm check` | ✅ 0 hata |
+| `pnpm test` | ✅ 12 dosya / **59 test** |
+| `pnpm release:check` | ✅ exit 0 · pack 41 dosya |
+| `pnpm docs:build` | ✅ `Complete!` · `mcp-tools.mdx` yalnız başlık satırı değişti (10 tool korunuyor) |
+| `git diff releases/index.mdx` | ✅ boş (T8) |
+| `pnpm install` | ✅ ignored-builds uyarısı yok (T9) |
+
 ## Açık İşler
 
 | # | İş | Efor | Not |
 |---|-----|------|-----|
-| T6 | `fix/year-range-json-schema` branch'ini main'e indir (merge veya PR) | S | Branch 2 commit ileri; `year_range` tuple düzeltmesi main'e girmedi |
-| T7 | `create-scholar-mcp-server.ts` (629 satır) böl | L | Tüm MCP tool tanımları tek dosyada; 4 dosya >400 satır. Upstream fork → merge çakışma riski |
-| T8 | `generate-docs-releases.mjs` fork'ta tag listesini siliyor | S | Script yerel `git tag`'leri okuyor; fork'ta tag yok → `releases/index.mdx` "No semantic version tags found" üretiyor ve upstream tag listesini siliyor. Upstream API'sini veya etiket fallback'ini kullanmalı. `docs:build` her çalıştığında dosya yeniden bozuluyor — commit'te revert edildi |
-| T9 | pnpm `ignored build scripts` uyarısı (esbuild, sharp) | XS | `pnpm approve-builds` ile geçerli `onlyBuiltDependencies` listesi yazılmalı; denetimdeki geçersiz `allowBuilds` placeholder'ının doğru karşılığı. Şu an sadece uyarı, build'leri engellemiyor |
+| T6 | ~~branch'i main'e indir~~ | — | ✅ 2026-11-15 — lokal merge + push |
+| T7 | ~~400 satır üstü dosyaları böl~~ | — | ✅ 2026-11-15 — `src` içinde >400 satır dosya yok |
+| T8 | ~~`generate-docs-releases.mjs` tag listesini siliyor~~ | — | ✅ 2026-11-15 — tag yoksa dosyaya dokunmuyor |
+| T9 | ~~pnpm `ignored build scripts`~~ | — | ✅ 2026-11-15 — `allowBuilds` bool haritası |
+| T10 | Upstream `lstudlo/ScholarMCP` tag'lerini fork'a çekme (`git fetch --tags upstream`) | XS | T8 alternatifi; upstream remote tanımlı değil. Fayda düşük: fork kendi tag'ini `pnpm release` ile üretiyor |
 | — | Stale `dist/` yenileme | — | Ertelendi: `prepack` zaten build ediyor, düşük değer |
 | — | Upstream drift / geri-merge stratejisi | — | Ertelendi: stratejik karar bekliyor |
 | — | `RESEARCH_SEMANTIC_ENGINE=cloud-llm` için OpenAI-uyumlu uç | — | Ertelendi: kullanım kanıtı gelince |
@@ -63,6 +97,10 @@ Arşiv: `D:\projects\_yedek\scholarmcp-onarim-20261101-093029`
 
 | Tarih | Karar | Gerekçe |
 |-------|-------|---------|
+| 2026-11-15 | pnpm build onayı `onlyBuiltDependencies` değil `allowBuilds: {pkg: true}` ile yazılacak | pnpm 11.28.9 `onlyBuiltDependencies`'ı yok sayıyor (uyarı sürüyor); `allowBuilds` bool haritası build adımlarını çalıştırdı |
+| 2026-11-15 | `generate-docs-api.mjs` tek dosya yerine `src/mcp/**` ağacını tarar | T7 bölmesinden sonra tek dosya taraması 10 tool yerine 0 tool üretiyordu |
+| 2026-11-15 | `generate-docs-releases.mjs` yerel tag yoksa mevcut `releases/index.mdx`'e dokunmaz | Fork'ta tag yok; üretmek upstream tag listesini siliyordu. Upstream API'sine bağımlılık (ağ + token) yerine muhafazakâr guard seçildi |
+| 2026-11-15 | `fix/year-range-json-schema` lokal merge + push ile main'e indirildi | Cenk Abi onayı; kendi fork'u, PR döngüsü gereksiz |
 | 2026-11-01 | `pnpm release` doğrulaması `release:check` ile yapılacak, tam release çalıştırılmayacak | `scripts/release.mjs` sürüm bump + commit + tag + **push** + `gh release create` yapıyor; geri dönüşü zor, onay ister |
 | 2026-11-01 | npm lockfile arşivlendi, silinmedi | Workspace `pnpm-lock.yaml` kullanıyor; arşiv geri dönüş kapısı bırakır |
 | 2026-10-17 | Kapsamlı test kapsamı kovalanmayacak | 59 test + typecheck + CI zaten yeşil |
